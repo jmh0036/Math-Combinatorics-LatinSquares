@@ -8,16 +8,22 @@ use Pod::Usage;
 
 =head1 NAME
 
-latin-squares - Generate a random latin square with rectangular regional constraints
+latin-squares - Generate latin squares with rectangular regional constraints
 
 =head1 SYNOPSIS
 
     latin-squares --region R C [--region R C ...] [--verbose] [--help]
+    latin-squares --region R C [...] --random
+    latin-squares --region R C [...] --count N
 
 =head1 DESCRIPTION
 
-Generates a random completed latin square on an NxN grid, where N is the
-common product of all specified region dimensions.
+Generates completed latin squares on an NxN grid, where N is the common product
+of all specified region dimensions.
+
+By default, B<all> solutions are printed.  Use C<--random> to get one random
+solution, or C<--count N> to get exactly N solutions.  If both C<--random> and
+C<--count> are given, C<--count> wins.
 
 Each C<--region R C> describes a complete uniform tiling of the NxN grid by
 RxC rectangles.  All tilings are enforced simultaneously: every box from every
@@ -36,9 +42,18 @@ A rectangular box shape to enforce as a latin regional constraint.  Repeat
 to specify multiple simultaneous tilings.  All pairs must have the same
 product R*C = N.
 
+=item B<--random>
+
+Return one random solution.  Ignored if C<--count> is also given.
+
+=item B<--count N>
+
+Return exactly N solutions (or fewer if the problem is that constrained).
+Overrides C<--random>.
+
 =item B<--verbose>
 
-Print each tiling's box map above the solution grid.
+Print each tiling's box map above the solution grid(s).
 
 =item B<--help>
 
@@ -48,19 +63,16 @@ Show this help message.
 
 =head1 EXAMPLES
 
-    # 9x9 with only 3x3 box constraint (not a full sudoku — no row/col)
+    # All solutions: 9x9 with only 3x3 box constraint
     latin-squares --region 3 3
 
-    # Classic 9x9 sudoku (rows + cols + 3x3 boxes)
-    latin-squares --region 1 9 --region 9 1 --region 3 3
+    # One random classic 9x9 sudoku
+    latin-squares --region 1 9 --region 9 1 --region 3 3 --random
 
-    # 6x6: both 2x3 and 3x2 box tilings simultaneously (no rows/cols)
-    latin-squares --region 2 3 --region 3 2 --verbose
+    # 5 random solutions: 6x6 sudoku pair latin square
+    latin-squares --region 1 6 --region 6 1 --region 2 3 --region 3 2 --count 5
 
-    # 6x6 full sudoku pair latin square: rows, cols, and both box orientations
-    latin-squares --region 1 6 --region 6 1 --region 2 3 --region 3 2 --verbose
-
-    # 4x4 with only 2x2 box constraint
+    # All solutions: 4x4 with only 2x2 box constraint
     latin-squares --region 2 2
 
 =cut
@@ -68,16 +80,33 @@ Show this help message.
 my @region_args;
 my $verbose = 0;
 my $help    = 0;
+my $random  = 0;
+my $count   = undef;
 
 GetOptions(
     'region=i{2}' => \@region_args,
     'verbose'     => \$verbose,
+    'random'      => \$random,
+    'count=i'     => \$count,
     'help|h'      => \$help,
 ) or pod2usage(2);
 
 pod2usage(-exitval => 0, -verbose => 2) if $help;
 pod2usage(-message => "At least one --region R C is required.\n", -exitval => 2)
     unless @region_args >= 2;
+
+if (defined $count) {
+    pod2usage(-message => "--count must be a positive integer.\n", -exitval => 2)
+        unless $count >= 1;
+    # --count overrides --random
+    $random = 0;
+}
+
+# Determine how many solutions to request from the solver.
+# undef means "all solutions".
+my $num_solutions = defined $count ? $count
+                  : $random        ? 1
+                  :                  undef;
 
 # Parse flat list of pairs from GetOptions
 my @regions;
@@ -95,7 +124,6 @@ my $N = $ls->n;
 
 if ($verbose) {
     my $specs = $ls->regions;
-    my $maps  = $ls->region_maps;
     for my $t (0 .. $#$specs) {
         my ($br, $bc) = @{ $specs->[$t] };
         printf "=== Tiling %d: %dx%d boxes ===\n", $t, $br, $bc;
@@ -104,9 +132,20 @@ if ($verbose) {
     }
 }
 
-my $grid = $ls->solve;
-die "No solution found for this combination of regional constraints.\n"
-    unless $grid;
+my $grids = $ls->solve(number_of_solutions => $num_solutions);
 
-print "=== Solution (${N}x${N}) ===\n" if $verbose;
-$ls->print_grid($grid);
+unless ($grids && @$grids) {
+    my $region_str = join(', ', map { "[$_->[0]x$_->[1]]" } @regions);
+    die "No solution found for regions: $region_str\n";
+}
+
+my $found = scalar @$grids;
+for my $i (0 .. $found - 1) {
+    if ($found > 1) {
+        printf "=== Solution %d of %d (%dx%d) ===\n", $i + 1, $found, $N, $N;
+    } elsif ($verbose) {
+        print "=== Solution (${N}x${N}) ===\n";
+    }
+    $ls->print_grid($grids->[$i]);
+    print "\n" if $found > 1;
+}
